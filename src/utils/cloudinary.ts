@@ -45,79 +45,68 @@ export const uploadToCloudinary = async (
     hasApiKey: !!CLOUDINARY_API_KEY
   });
 
-  // Try with the most basic unsigned upload first
+  // Determine resource type based on file
+  let resourceType = 'auto';
+  if (file.type === 'application/pdf') {
+    resourceType = 'raw'; // PDFs should use 'raw' resource type
+  } else if (file.type.startsWith('image/')) {
+    resourceType = 'image';
+  }
+
+  // Try unsigned upload with different presets
+  const presetsToTry = ['ml_default', 'unsigned_uploads', 'intelliclass'];
+  
+  for (const preset of presetsToTry) {
+    try {
+      console.log(`Attempting unsigned upload with preset: ${preset}`);
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('upload_preset', preset);
+      formData.append('folder', folder);
+
+      const uploadUrl = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/${resourceType}/upload`;
+
+      const result = await attemptUpload(uploadUrl, formData, onProgress);
+      console.log(`Upload successful with preset: ${preset}`);
+      return result;
+
+    } catch (error: any) {
+      console.warn(`Upload with preset ${preset} failed:`, error.message);
+      // Continue to next preset
+    }
+  }
+
+  // If all presets fail, try without preset (requires Cloudinary settings to allow)
   try {
-    console.log('Attempting basic unsigned upload to Cloudinary');
+    console.log('Attempting upload without preset');
 
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('upload_preset', 'ml_default'); // Cloudinary's default preset
+    formData.append('folder', folder);
+    
+    // For unsigned uploads without preset, we need API key
+    if (CLOUDINARY_API_KEY) {
+      formData.append('api_key', CLOUDINARY_API_KEY);
+      formData.append('timestamp', Math.round(Date.now() / 1000).toString());
+    }
 
-    const uploadUrl = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/upload`;
+    const uploadUrl = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/${resourceType}/upload`;
 
     const result = await attemptUpload(uploadUrl, formData, onProgress);
-    console.log('Basic unsigned upload successful');
+    console.log('Upload successful without preset');
     return result;
 
-  } catch (error) {
-    console.warn('Basic unsigned upload failed:', error);
-
-    // Try with a custom preset if ml_default doesn't work
-    try {
-      console.log('Attempting upload with assignment_uploads preset');
-
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('upload_preset', 'assignment_uploads');
-      formData.append('folder', folder);
-
-      const uploadUrl = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/upload`;
-
-      const result = await attemptUpload(uploadUrl, formData, onProgress);
-      console.log('Custom preset upload successful');
-      return result;
-
-    } catch (customError) {
-      console.warn('Custom preset upload failed:', customError);
-    }
+  } catch (error: any) {
+    console.error('All upload methods failed:', error);
+    
+    // Provide helpful error message
+    throw new Error(
+      `Cloudinary upload failed. Please ensure you have created an unsigned upload preset named "ml_default" or "unsigned_uploads" in your Cloudinary dashboard. ` +
+      `Go to Settings > Upload > Upload presets > Add upload preset > Set "Signing Mode" to "Unsigned". ` +
+      `Original error: ${error.message}`
+    );
   }
-
-  // If unsigned upload fails, try signed upload with API key
-  if (CLOUDINARY_API_KEY) {
-    try {
-      console.log('Attempting signed upload to Cloudinary');
-
-      const timestamp = Math.round(Date.now() / 1000);
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('timestamp', timestamp.toString());
-      formData.append('api_key', CLOUDINARY_API_KEY);
-
-      // Add folder for organization
-      formData.append('folder', folder);
-
-      // Add resource type based on file type
-      if (file.type.startsWith('image/')) {
-        formData.append('resource_type', 'image');
-      } else if (file.type === 'application/pdf') {
-        formData.append('resource_type', 'raw');
-      } else {
-        formData.append('resource_type', 'auto');
-      }
-
-      const uploadUrl = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/upload`;
-
-      const result = await attemptUpload(uploadUrl, formData, onProgress);
-      console.log('Signed upload successful');
-      return result;
-
-    } catch (error) {
-      console.error('Signed upload also failed:', error);
-      throw error;
-    }
-  }
-
-  throw new Error('All upload methods failed. Please check your Cloudinary configuration.');
 };
 
 /**

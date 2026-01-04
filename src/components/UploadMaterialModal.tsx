@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { XIcon, UploadIcon } from 'lucide-react';
-import { CloudinaryUploadResult } from '../utils/cloudinary';
+import { UploadResult } from '../utils/storage';
 import { createClassMaterials } from '../utils/supabase';
 import MaterialFileUpload from './MaterialFileUpload';
 import { toast } from 'react-hot-toast';
@@ -25,18 +25,18 @@ const UploadMaterialModal: React.FC<UploadMaterialModalProps> = ({
   teacherId,
   onMaterialsUploaded
 }) => {
-  const [uploadedFiles, setUploadedFiles] = useState<CloudinaryUploadResult[]>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadResult[]>([]);
   const [materialsData, setMaterialsData] = useState<MaterialFormData[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleFilesUploaded = (results: CloudinaryUploadResult[]) => {
+  const handleFilesUploaded = (results: UploadResult[]) => {
     setUploadedFiles(results);
     // Initialize form data for each uploaded file
     const initialData = results.map(result => ({
-      title: result.original_filename.replace(/\.[^/.]+$/, ''), // Remove file extension
+      title: result.fileName.replace(/\.[^/.]+$/, ''), // Remove file extension
       description: ''
     }));
     setMaterialsData(initialData);
@@ -77,11 +77,11 @@ const UploadMaterialModal: React.FC<UploadMaterialModalProps> = ({
         teacher_id: teacherId,
         title: materialsData[index].title.trim(),
         description: materialsData[index].description.trim() || undefined,
-        file_url: file.secure_url,
-        file_name: file.original_filename,
-        file_type: file.format,
-        file_size: file.bytes,
-        cloudinary_public_id: file.public_id
+        file_url: file.url,
+        file_name: file.fileName,
+        file_type: file.fileType,
+        file_size: file.fileSize,
+        storage_path: file.path
       }));
 
       const { data, error } = await createClassMaterials(materialsToCreate);
@@ -158,9 +158,9 @@ const UploadMaterialModal: React.FC<UploadMaterialModalProps> = ({
                     {/* File Info and Form */}
                     <div className="flex-1 space-y-4">
                       <div>
-                        <p className="text-sm font-medium text-gray-900">{file.original_filename}</p>
+                        <p className="text-sm font-medium text-gray-900">{file.fileName}</p>
                         <p className="text-xs text-gray-500">
-                          {file.format.toUpperCase()} • {(file.bytes / 1024 / 1024).toFixed(2)} MB
+                          {file.fileType.split('/').pop()?.toUpperCase() || 'FILE'} • {(file.fileSize / 1024 / 1024).toFixed(2)} MB
                         </p>
                       </div>
 

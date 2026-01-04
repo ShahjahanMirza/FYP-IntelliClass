@@ -1,9 +1,91 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { supabase } from './supabase';
 
-// Initialize Gemini AI
+// Initialize Gemini AI (Primary)
 const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY || '');
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+const geminiModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+// Groq API configuration (Fallback)
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || '';
+const GROQ_MODEL = 'moonshotai/kimi-k2-instruct-0905';
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+
+// Helper function to call Groq API
+const callGroqAPI = async (prompt: string): Promise<string> => {
+  console.log('Falling back to Groq API...');
+  
+  const response = await fetch(GROQ_API_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${GROQ_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      messages: [
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 4096,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(`Groq API error: ${response.status} - ${errorData.error?.message || response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data.choices[0]?.message?.content || '';
+};
+
+// Unified AI call with fallback
+const generateWithFallback = async (prompt: string): Promise<string> => {
+  try {
+    // Try Gemini first
+    console.log('Attempting Gemini API...');
+    const result = await geminiModel.generateContent(prompt);
+    const response = result.response;
+    const text = response.text();
+    console.log('Gemini API succeeded');
+    return text;
+  } catch (geminiError: any) {
+    console.warn('Gemini API failed:', geminiError.message);
+    
+    // Check if it's a quota/rate limit error or model not found
+    const isQuotaError = geminiError.message?.includes('quota') || 
+                         geminiError.message?.includes('429') ||
+                         geminiError.message?.includes('rate') ||
+                         geminiError.message?.includes('Resource has been exhausted') ||
+                         geminiError.message?.includes('not found') ||
+                         geminiError.message?.includes('not supported');
+    
+    if (isQuotaError) {
+      console.log('Quota/rate limit exceeded or model unavailable, falling back to Groq...');
+      try {
+        const groqResponse = await callGroqAPI(prompt);
+        console.log('Groq API succeeded');
+        return groqResponse;
+      } catch (groqError: any) {
+        console.error('Groq API also failed:', groqError.message);
+        throw new Error(`Both AI providers failed. Gemini: ${geminiError.message}, Groq: ${groqError.message}`);
+      }
+    }
+    
+    // For other errors, still try Groq as fallback
+    try {
+      const groqResponse = await callGroqAPI(prompt);
+      console.log('Groq API succeeded (fallback)');
+      return groqResponse;
+    } catch (groqError: any) {
+      // If Groq also fails, throw the original Gemini error
+      throw geminiError;
+    }
+  }
+};
 
 // Helper function to convert file to base64
 const fileToBase64 = (file: File): Promise<string> => {
@@ -20,64 +102,48 @@ const fileToBase64 = (file: File): Promise<string> => {
 // Health check
 export const checkHealth = async () => {
   try {
-    // Simple test to check if Gemini API is accessible
-    const result = await model.generateContent('Hello');
-    return { status: 'healthy', message: 'Gemini API is accessible' };
+    // Simple test to check if AI APIs are accessible
+    const result = await generateWithFallback('Hello');
+    return { status: 'healthy', message: 'AI API is accessible' };
   } catch (error) {
     console.error('Health check failed:', error);
-    return { status: 'unhealthy', message: 'Gemini API is not accessible' };
+    return { status: 'unhealthy', message: 'AI API is not accessible' };
   }
 };
 
 // Test Gemini API connection and response structure
 export const testGeminiConnection = async () => {
-  console.log('=== GEMINI CONNECTION TEST START ===');
+  console.log('=== AI CONNECTION TEST START ===');
   console.log('Environment check:');
   console.log('- VITE_GEMINI_API_KEY exists:', !!import.meta.env.VITE_GEMINI_API_KEY);
-  console.log('- API Key length:', import.meta.env.VITE_GEMINI_API_KEY?.length || 0);
-  console.log('- API Key preview:', import.meta.env.VITE_GEMINI_API_KEY?.substring(0, 10) + '...');
+  console.log('- VITE_GROQ_API_KEY exists:', !!import.meta.env.VITE_GROQ_API_KEY);
   
   try {
-    console.log('Testing simple content generation...');
+    console.log('Testing AI content generation with fallback...');
     const testPrompt = 'Generate a simple test response with the word "SUCCESS" in it.';
     
-    const result = await model.generateContent(testPrompt);
-    console.log('Test result object:', result);
-    console.log('Test result type:', typeof result);
-    console.log('Test result keys:', Object.keys(result || {}));
-    
-    const response = await result.response;
-    console.log('Test response object:', response);
-    console.log('Test response type:', typeof response);
-    console.log('Test response keys:', Object.keys(response || {}));
-    
-    const text = response.text();
-    console.log('Test text type:', typeof text);
-    console.log('Test text length:', text?.length || 0);
+    const text = await generateWithFallback(testPrompt);
     console.log('Test text content:', text);
     
     const testResult = {
       success: true,
       test_content: text,
-      message: 'Gemini API test successful'
+      message: 'AI API test successful'
     };
     
     console.log('Test return object:', testResult);
-    console.log('=== GEMINI CONNECTION TEST SUCCESS ===');
+    console.log('=== AI CONNECTION TEST SUCCESS ===');
     
     return testResult;
   } catch (error: any) {
-    console.error('=== GEMINI CONNECTION TEST ERROR ===');
-    console.error('Error type:', typeof error);
+    console.error('=== AI CONNECTION TEST ERROR ===');
     console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
-    console.error('Full error object:', error);
-    console.error('=== GEMINI CONNECTION TEST ERROR END ===');
+    console.error('=== AI CONNECTION TEST ERROR END ===');
     
     return {
       success: false,
       error: error.message,
-      message: 'Gemini API test failed'
+      message: 'AI API test failed'
     };
   }
 };
@@ -255,12 +321,10 @@ const extractTextFromImage = async (file: File) => {
     throw new Error(`Failed to extract text from the image: ${error.message || 'Unknown error occurred'}. Please try with a different image.`);
   }
 };
-// AI document generation using Gemini
+// AI document generation using Gemini with Groq fallback
 export const generateDocument = async (prompt: string, maxMarks: number = 100, daysUntilDue: number = 7) => {
   console.log('=== generateDocument DEBUG START ===');
   console.log('Input parameters:', { prompt, maxMarks, daysUntilDue });
-  console.log('API Key available:', !!import.meta.env.VITE_GEMINI_API_KEY);
-  console.log('API Key length:', import.meta.env.VITE_GEMINI_API_KEY?.length || 0);
   
   try {
     const enhancedPrompt = `Generate an educational assignment based on the following requirements:
@@ -277,50 +341,32 @@ Please create a comprehensive assignment that includes:
 
 Format the response as a well-structured assignment document.`;
     
-    console.log('Enhanced prompt:', enhancedPrompt);
-    console.log('Calling Gemini API...');
+    console.log('Calling AI API with fallback...');
     
-    const result = await model.generateContent(enhancedPrompt);
-    console.log('Raw result object:', result);
-    console.log('Result type:', typeof result);
-    console.log('Result keys:', Object.keys(result || {}));
-    
-    const response = await result.response;
-    console.log('Raw response object:', response);
-    console.log('Response type:', typeof response);
-    console.log('Response keys:', Object.keys(response || {}));
-    
-    const generatedContent = response.text();
-    console.log('Generated content type:', typeof generatedContent);
+    const generatedContent = await generateWithFallback(enhancedPrompt);
     console.log('Generated content length:', generatedContent?.length || 0);
-    console.log('Generated content preview:', generatedContent?.substring(0, 200));
     
     const returnObject = {
       success: true,
       generated_content: generatedContent,
       max_marks: maxMarks,
       days_until_due: daysUntilDue,
-      message: 'Assignment generated successfully using Gemini'
+      message: 'Assignment generated successfully'
     };
     
-    console.log('Return object:', returnObject);
-    console.log('Return object keys:', Object.keys(returnObject));
     console.log('=== generateDocument DEBUG END ===');
     
     return returnObject;
   } catch (error: any) {
     console.error('=== generateDocument ERROR ===');
-    console.error('Error type:', typeof error);
     console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
-    console.error('Full error object:', error);
     console.error('=== generateDocument ERROR END ===');
     throw new Error(`Failed to generate document: ${error.message}`);
   }
 };
-// Submission grading using Gemini
+// Submission grading using AI with fallback
 export const gradeSubmission = async (gradingMode: string, ocrText: string | null, generatedContent: any | null, gradingCriteria?: string, customInstructions?: string) => {
-  console.log('Calling gradeSubmission with Gemini:', { gradingMode, ocrTextLength: ocrText?.length, generatedContent, gradingCriteria, customInstructions });
+  console.log('Calling gradeSubmission with AI fallback:', { gradingMode, ocrTextLength: ocrText?.length, generatedContent, gradingCriteria, customInstructions });
   
   try {
     let prompt = `Please grade the following student submission based on the provided criteria:
@@ -357,15 +403,25 @@ Format your response as JSON with the following structure:
   "improvements": "<areas_for_improvement>"
 }`;
     
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const gradingResult = response.text();
+    const gradingResult = await generateWithFallback(prompt);
     
-    console.log('gradeSubmission Gemini response:', gradingResult);
+    console.log('gradeSubmission AI response:', gradingResult);
     
     // Try to parse JSON response, fallback to text if parsing fails
     try {
-      const parsedResult = JSON.parse(gradingResult);
+      // Clean up the response - remove markdown code blocks if present
+      let cleanedResult = gradingResult.trim();
+      if (cleanedResult.startsWith('```json')) {
+        cleanedResult = cleanedResult.slice(7);
+      } else if (cleanedResult.startsWith('```')) {
+        cleanedResult = cleanedResult.slice(3);
+      }
+      if (cleanedResult.endsWith('```')) {
+        cleanedResult = cleanedResult.slice(0, -3);
+      }
+      cleanedResult = cleanedResult.trim();
+      
+      const parsedResult = JSON.parse(cleanedResult);
       console.log('Parsed grading result:', parsedResult);
       
       // Extract grade from different possible field names
@@ -376,13 +432,13 @@ Format your response as JSON with the following structure:
       
       return {
         success: true,
-        grade: Number(grade), // Ensure it's a number
+        grade: Number(grade),
         feedback: feedback,
         strengths: parsedResult.strengths || '',
         improvements: parsedResult.improvements || parsedResult.areas_for_improvement || '',
-        final_marks: Number(grade), // Also set final_marks for compatibility
-        review: feedback, // Also set review for compatibility
-        message: 'Submission graded successfully using Gemini'
+        final_marks: Number(grade),
+        review: feedback,
+        message: 'Submission graded successfully'
       };
     } catch (parseError) {
       console.log('JSON parse failed, using text format. Parse error:', parseError);
@@ -392,20 +448,19 @@ Format your response as JSON with the following structure:
         feedback: gradingResult,
         final_marks: 0,
         review: gradingResult,
-        message: 'Submission graded successfully using Gemini (text format)'
+        message: 'Submission graded successfully (text format)'
       };
     }
   } catch (error: any) {
-    console.error('gradeSubmission Gemini error:', error);
+    console.error('gradeSubmission AI error:', error);
     throw new Error(`Failed to grade submission: ${error.message}`);
   }
 };
 
-// Generate answers for assignments using Gemini
+// Generate answers for assignments using AI with fallback
 export const generateAnswers = async (assignmentContent: string, maxMarks: number = 100) => {
   console.log('=== generateAnswers DEBUG START ===');
   console.log('Input parameters:', { assignmentContent: assignmentContent?.substring(0, 200), maxMarks });
-  console.log('API Key available:', !!import.meta.env.VITE_GEMINI_API_KEY);
   
   try {
     const prompt = `Based on the following assignment, generate comprehensive model answers:
@@ -423,39 +478,24 @@ Please provide:
 
 Format the response clearly with proper headings and structure.`;
     
-    console.log('Calling Gemini API for answers...');
+    console.log('Calling AI API with fallback for answers...');
     
-    const result = await model.generateContent(prompt);
-    console.log('Raw result object:', result);
-    console.log('Result keys:', Object.keys(result || {}));
-    
-    const response = await result.response;
-    console.log('Raw response object:', response);
-    console.log('Response keys:', Object.keys(response || {}));
-    
-    const generatedAnswers = response.text();
-    console.log('Generated answers type:', typeof generatedAnswers);
+    const generatedAnswers = await generateWithFallback(prompt);
     console.log('Generated answers length:', generatedAnswers?.length || 0);
-    console.log('Generated answers preview:', generatedAnswers?.substring(0, 200));
     
     const returnObject = {
       success: true,
       generated_answers: generatedAnswers,
       max_marks: maxMarks,
-      message: 'Model answers generated successfully using Gemini'
+      message: 'Model answers generated successfully'
     };
     
-    console.log('Return object:', returnObject);
-    console.log('Return object keys:', Object.keys(returnObject));
     console.log('=== generateAnswers DEBUG END ===');
     
     return returnObject;
   } catch (error: any) {
     console.error('=== generateAnswers ERROR ===');
-    console.error('Error type:', typeof error);
     console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
-    console.error('Full error object:', error);
     console.error('=== generateAnswers ERROR END ===');
     throw new Error(`Failed to generate answers: ${error.message}`);
   }

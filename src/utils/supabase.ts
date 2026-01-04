@@ -249,22 +249,17 @@ export const updateUserProfile = async (userId: string, updates: Partial<User>) 
   return { data, error };
 };
 
-// Helper function to upload avatar using Cloudinary
+// Helper function to upload avatar using Supabase Storage
 export const uploadAvatar = async (userId: string, file: File) => {
   try {
-    // Import Cloudinary upload function
-    const { uploadToCloudinary } = await import('./cloudinary');
+    // Import Supabase Storage upload function
+    const { uploadAvatar: uploadAvatarToStorage } = await import('./storage');
 
-    // Create a modified file with a specific name for avatars
-    const fileExt = file.name.split('.').pop();
-    const fileName = `avatar_${userId}.${fileExt}`;
-    const renamedFile = new File([file], fileName, { type: file.type });
-
-    // Upload to Cloudinary with avatars folder
-    const result = await uploadToCloudinary(renamedFile, undefined, 'avatars');
+    // Upload to Supabase Storage
+    const result = await uploadAvatarToStorage(file);
 
     return {
-      data: { publicUrl: result.secure_url },
+      data: { publicUrl: result.url },
       error: null
     };
   } catch (error) {
@@ -1079,7 +1074,22 @@ export const getClassGradesComprehensive = async (classId: string) => {
     return { data: null, error };
   }
 
-  return { data, error: null };
+  // Transform data to match GradesSpreadsheet expected format
+  const transformedData = data?.map((row: any) => ({
+    id: row.submission_id || `${row.student_id}-${row.assignment_id}`,
+    studentName: row.student_name,
+    studentId: row.student_id,
+    assignment: row.assignment_title,
+    assignmentId: row.assignment_id,
+    marks: row.grade,
+    maxMarks: row.assignment_max_marks,
+    submitted: !!row.submission_id,
+    submittedAt: row.submitted_at,
+    gradedAt: row.graded_at,
+    feedback: row.feedback
+  })) || [];
+
+  return { data: transformedData, error: null };
 };
 
 // Get student-specific grades for a class
@@ -1682,7 +1692,7 @@ export const createClassMaterial = async (materialData: {
   file_name: string;
   file_type: string;
   file_size: number;
-  cloudinary_public_id: string;
+  storage_path?: string;
 }) => {
   try {
     const { data, error } = await supabase
@@ -1708,7 +1718,7 @@ export const createClassMaterials = async (materialsData: Array<{
   file_name: string;
   file_type: string;
   file_size: number;
-  cloudinary_public_id: string;
+  storage_path?: string;
 }>) => {
   try {
     const { data, error } = await supabase
@@ -2042,5 +2052,217 @@ export const getVideoRoom = async (roomId: string) => {
   } catch (error: any) {
     console.error('Error fetching video room:', error);
     return { data: null, error };
+  }
+};
+
+// =====================================================
+// INTELLIMEET INTEGRATION FUNCTIONS
+// =====================================================
+
+export interface Meeting {
+  id: string;
+  code: string;
+  title: string;
+  host_id: string;
+  class_id?: string;
+  source: 'standalone' | 'class';
+  status: 'scheduled' | 'active' | 'ended';
+  scheduled_time?: string;
+  started_at?: string;
+  ended_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Create a meeting for a class
+export const createClassMeeting = async (meetingData: {
+  title: string;
+  host_id: string;
+  class_id: string;
+}) => {
+  try {
+    // Generate unique meeting code
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let meetingCode = '';
+    for (let i = 0; i < 8; i++) {
+      meetingCode += characters.charAt(Math.floor(Math.random() * characters.length));
+    }
+
+    const { data, error } = await supabase
+      .from('meetings')
+      .insert({
+        code: meetingCode,
+        title: meetingData.title,
+        host_id: meetingData.host_id,
+        class_id: meetingData.class_id,
+        source: 'class',
+        status: 'active',
+        started_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error creating meeting:', error);
+      return { data: null, error };
+    }
+
+    // Add host as participant
+    await supabase.from('meeting_participants').insert({
+      meeting_id: data.id,
+      user_id: meetingData.host_id,
+      is_host: true,
+    });
+
+    return { data, error: null };
+  } catch (error: any) {
+    console.error('Error creating class meeting:', error);
+    return { data: null, error };
+  }
+};
+
+// Get active meeting for a class
+export const getActiveClassMeeting = async (classId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('meetings')
+      .select(`
+        *,
+        users!meetings_host_id_fkey (
+          id,
+          name,
+          email
+        )
+      `)
+      .eq('class_id', classId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    return { data, error };
+  } catch (error: any) {
+    console.error('Error fetching active class meeting:', error);
+    return { data: null, error };
+  }
+};
+
+// End a meeting
+export const endMeeting = async (meetingId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('meetings')
+      .update({
+        status: 'ended',
+        ended_at: new Date().toISOString(),
+      })
+      .eq('id', meetingId)
+      .select()
+      .single();
+
+    return { data, error };
+  } catch (error: any) {
+    console.error('Error ending meeting:', error);
+    return { data: null, error };
+  }
+};
+
+// Join a meeting as participant
+export const joinMeeting = async (meetingCode: string, userId: string) => {
+  try {
+    // Find the meeting
+    const { data: meeting, error: meetingError } = await supabase
+      .from('meetings')
+      .select('*')
+      .eq('code', meetingCode)
+      .eq('status', 'active')
+      .single();
+
+    if (meetingError || !meeting) {
+      return { data: null, error: meetingError || new Error('Meeting not found') };
+    }
+
+    // Check if already a participant
+    const { data: existingParticipant } = await supabase
+      .from('meeting_participants')
+      .select('id')
+      .eq('meeting_id', meeting.id)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (!existingParticipant) {
+      // Add as participant
+      await supabase.from('meeting_participants').insert({
+        meeting_id: meeting.id,
+        user_id: userId,
+        is_host: false,
+      });
+    }
+
+    return { data: meeting, error: null };
+  } catch (error: any) {
+    console.error('Error joining meeting:', error);
+    return { data: null, error };
+  }
+};
+
+// Get meeting by code
+export const getMeetingByCode = async (code: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('meetings')
+      .select(`
+        *,
+        users!meetings_host_id_fkey (
+          id,
+          name,
+          email
+        ),
+        classes (
+          id,
+          name,
+          subject
+        )
+      `)
+      .eq('code', code)
+      .single();
+
+    return { data, error };
+  } catch (error: any) {
+    console.error('Error fetching meeting:', error);
+    return { data: null, error };
+  }
+};
+
+// Notify class members about a meeting
+export const notifyClassAboutMeeting = async (classId: string, meetingCode: string, meetingTitle: string, hostName: string) => {
+  try {
+    // Get all class members except the host
+    const { data: members, error: membersError } = await supabase
+      .from('class_members')
+      .select('user_id')
+      .eq('class_id', classId);
+
+    if (membersError || !members) {
+      return { error: membersError };
+    }
+
+    // Create notifications for all members
+    const notifications = members.map(member => ({
+      user_id: member.user_id,
+      title: '📹 Live Class Meeting',
+      message: `${hostName} has started a meeting: "${meetingTitle}". Join now!`,
+      type: 'meeting' as const,
+      related_id: meetingCode,
+    }));
+
+    const { error } = await supabase
+      .from('notifications')
+      .insert(notifications);
+
+    return { error };
+  } catch (error: any) {
+    console.error('Error notifying class about meeting:', error);
+    return { error };
   }
 };

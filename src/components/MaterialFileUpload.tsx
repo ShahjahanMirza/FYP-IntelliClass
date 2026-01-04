@@ -1,9 +1,9 @@
 import React, { useState, useRef } from 'react';
 import { FileUpIcon, LoaderIcon, CheckCircleIcon, XCircleIcon, FileIcon, TrashIcon } from 'lucide-react';
-import { uploadMaterialsToCloudinary, validateMaterialFile, CloudinaryUploadResult, UploadProgress } from '../utils/cloudinary';
+import { uploadMaterials, validateMaterialFile, UploadResult, UploadProgress } from '../utils/storage';
 
 interface MaterialFileUploadProps {
-  onUploadComplete: (results: CloudinaryUploadResult[]) => void;
+  onUploadComplete: (results: UploadResult[]) => void;
   onUploadError: (errors: string[]) => void;
   onUploadStart?: () => void;
   classId?: string;
@@ -15,7 +15,7 @@ interface MaterialFileUploadProps {
 interface FileWithProgress {
   file: File;
   progress?: UploadProgress;
-  result?: CloudinaryUploadResult;
+  result?: UploadResult;
   error?: string;
   status: 'pending' | 'uploading' | 'completed' | 'error';
 }
@@ -31,7 +31,7 @@ const MaterialFileUpload: React.FC<MaterialFileUploadProps> = ({
 }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<FileWithProgress[]>([]);
-  const [uploadResults, setUploadResults] = useState<CloudinaryUploadResult[]>([]);
+  const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -93,16 +93,16 @@ const MaterialFileUpload: React.FC<MaterialFileUploadProps> = ({
       const files = selectedFiles.map(f => f.file);
       
       // Update progress for each file
-      const { results, errors: uploadErrors } = await uploadMaterialsToCloudinary(
+      const { results, errors: uploadErrors } = await uploadMaterials(
         files,
+        classId || 'general',
         (fileIndex, progress) => {
           setSelectedFiles(prev => prev.map((fileWithProgress, index) => 
             index === fileIndex 
               ? { ...fileWithProgress, progress, status: 'uploading' }
               : fileWithProgress
           ));
-        },
-        classId
+        }
       );
 
       // Update final status for each file

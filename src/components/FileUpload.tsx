@@ -1,11 +1,12 @@
 import React, { useState, useRef } from 'react';
 import { FileUpIcon, LoaderIcon, CheckCircleIcon, XCircleIcon, FileIcon } from 'lucide-react';
-import { uploadToCloudinary, validateFile, CloudinaryUploadResult, UploadProgress } from '../utils/cloudinary';
+import { uploadSubmission, validateSubmissionFile, UploadResult } from '../utils/storage';
 
 interface FileUploadProps {
-  onUploadComplete: (result: CloudinaryUploadResult) => void;
+  onUploadComplete: (result: UploadResult) => void;
   onUploadError: (error: string) => void;
   onUploadStart?: () => void;
+  assignmentId?: string;
   acceptedTypes?: string[];
   maxSizeInMB?: number;
   disabled?: boolean;
@@ -16,15 +17,16 @@ const FileUpload: React.FC<FileUploadProps> = ({
   onUploadComplete,
   onUploadError,
   onUploadStart,
+  assignmentId = 'general',
   acceptedTypes = ['.pdf', '.png', '.jpg', '.jpeg', '.avif'],
   maxSizeInMB = 10,
   disabled = false,
   className = ''
 }) => {
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploadResult, setUploadResult] = useState<CloudinaryUploadResult | null>(null);
+  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -37,7 +39,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
     setUploadProgress(null);
 
     // Validate file
-    const validation = validateFile(file);
+    const validation = validateSubmissionFile(file);
     if (!validation.valid) {
       setError(validation.error || 'Invalid file');
       setSelectedFile(null);
@@ -55,16 +57,22 @@ const FileUpload: React.FC<FileUploadProps> = ({
 
     setIsUploading(true);
     setError(null);
-    setUploadProgress(null);
+    setUploadProgress(0);
 
     if (onUploadStart) {
       onUploadStart();
     }
 
     try {
-      const result = await uploadToCloudinary(selectedFile, (progress) => {
-        setUploadProgress(progress);
-      });
+      // Simulate progress since Supabase doesn't provide upload progress
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => Math.min((prev || 0) + 10, 90));
+      }, 100);
+
+      const result = await uploadSubmission(selectedFile, assignmentId);
+      
+      clearInterval(progressInterval);
+      setUploadProgress(100);
 
       setUploadResult(result);
       onUploadComplete(result);
@@ -166,16 +174,16 @@ const FileUpload: React.FC<FileUploadProps> = ({
       )}
 
       {/* Upload Progress */}
-      {uploadProgress && (
+      {uploadProgress !== null && uploadProgress < 100 && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-medium text-blue-800">Uploading...</span>
-            <span className="text-sm text-blue-600">{uploadProgress.percentage}%</span>
+            <span className="text-sm text-blue-600">{uploadProgress}%</span>
           </div>
           <div className="w-full bg-blue-200 rounded-full h-2">
             <div
               className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-              style={{ width: `${uploadProgress.percentage}%` }}
+              style={{ width: `${uploadProgress}%` }}
             />
           </div>
         </div>
@@ -189,7 +197,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
             <div className="flex-1">
               <p className="text-sm font-medium text-green-800">Upload Successful</p>
               <p className="text-xs text-green-600">
-                File uploaded to cloud storage • {formatFileSize(uploadResult.bytes)}
+                File uploaded to Supabase Storage • {formatFileSize(uploadResult.fileSize)}
               </p>
             </div>
           </div>

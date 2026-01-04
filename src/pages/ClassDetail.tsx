@@ -1,15 +1,14 @@
 import React, { useEffect, useState, Suspense } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { PlusIcon, FileTextIcon, CalendarIcon, UsersIcon, UserPlusIcon, Copy } from 'lucide-react';
+import { PlusIcon, FileTextIcon, CalendarIcon, UsersIcon, UserPlusIcon, Copy, Video } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { getClassAssignments, getClassDetails, getClassGradesComprehensive, getStudentGrades, getClassMembersWithSubmissions, supabase, fixRLSForTeachers, getActiveVideoRoom, createNotification } from '../utils/supabase';
+import { getClassAssignments, getClassDetails, getClassGradesComprehensive, getStudentGrades, getClassMembersWithSubmissions, supabase, fixRLSForTeachers, createNotification, getActiveClassMeeting } from '../utils/supabase';
 import { toast } from 'react-toastify';
 import { toast as hotToast } from 'react-hot-toast';
 import StudentGrades from '../components/grades/StudentGrades';
 import ClassMaterials from '../components/ClassMaterials';
 import BackButton from '../components/BackButton';
-import { useWebRTC } from '../context/WebRTCContext';
-import VideoRoom from '../components/video/VideoRoom';
+import ClassMeeting from '../components/meeting/ClassMeeting';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorBoundary from '../components/ErrorBoundary';
 import ScrollToTopButton from '../components/ScrollToTopButton';
@@ -39,11 +38,6 @@ const ClassDetail = React.memo(() => {
   const [classInfo, setClassInfo] = useState<ClassInfo | null>(null);
   const [classMembers, setClassMembers] = useState<any[]>([]);
   const [isTeacher, setIsTeacher] = useState(false);
-
-  // Video room state
-  const [activeVideoRoom, setActiveVideoRoom] = useState<any>(null);
-  const [showVideoRoom, setShowVideoRoom] = useState(false);
-  const { createRoom, joinRoom, endRoom } = useWebRTC();
 
   const copyClassCode = async () => {
     if (classInfo?.class_code) {
@@ -199,11 +193,6 @@ const ClassDetail = React.memo(() => {
           }
         }
 
-        // Check for active video room
-        const { data: videoRoom, error: videoRoomError } = await getActiveVideoRoom(classId);
-        if (!videoRoomError && videoRoom) {
-          setActiveVideoRoom(videoRoom);
-        }
       } catch (error) {
         console.error('Error fetching class data:', error);
       } finally {
@@ -214,25 +203,6 @@ const ClassDetail = React.memo(() => {
       fetchClassData();
     }
   }, [classId, user, isTeacherForClass]);
-
-  const handleLeaveVideoRoom = () => {
-    setShowVideoRoom(false);
-    // Refresh to check if room is still active
-    if (classId) {
-      getActiveVideoRoom(classId).then(({ data }) => {
-        setActiveVideoRoom(data);
-      });
-    }
-  };
-
-  if (showVideoRoom && activeVideoRoom) {
-    return (
-      <VideoRoom
-        roomId={activeVideoRoom.room_id}
-        onLeave={handleLeaveVideoRoom}
-      />
-    );
-  }
 
   if (isLoading || !classInfo) {
     return <div className="max-w-7xl mx-auto">
@@ -287,6 +257,10 @@ const ClassDetail = React.memo(() => {
           <button className={`px-6 py-4 font-medium ${activeTab === 'materials' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-blue-600'}`} onClick={() => setActiveTab('materials')}>
             Materials
           </button>
+          <button className={`px-6 py-4 font-medium flex items-center space-x-2 ${activeTab === 'meeting' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-blue-600'}`} onClick={() => setActiveTab('meeting')}>
+            <Video className="h-4 w-4" />
+            <span>Meeting</span>
+          </button>
           <button className={`px-6 py-4 font-medium ${activeTab === 'grades' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-blue-600'}`} onClick={() => setActiveTab('grades')}>
             Grades
           </button>
@@ -337,6 +311,13 @@ const ClassDetail = React.memo(() => {
             </div>}
           {activeTab === 'materials' && (
             <ClassMaterials classId={classId!} />
+          )}
+          {activeTab === 'meeting' && classInfo && (
+            <ClassMeeting 
+              classId={classId!} 
+              className={classInfo.name}
+              isTeacher={isTeacher}
+            />
           )}
           {activeTab === 'grades' && (
             isTeacher ? (

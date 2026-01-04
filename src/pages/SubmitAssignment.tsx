@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import { extractText, gradeSubmission } from '../utils/api';
 import { getAssignmentDetails, createSubmission, getSubmission, updateSubmission, createNotification } from '../utils/supabase';
 import { useAuth } from '../context/AuthContext';
-import { CloudinaryUploadResult } from '../utils/cloudinary';
+import { UploadResult } from '../utils/storage';
 import BackButton from '../components/BackButton';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorAlert from '../components/ErrorAlert';
@@ -24,7 +24,7 @@ const SubmitAssignment = () => {
   const { user } = useAuth();
   const [assignment, setAssignment] = useState<any>(null);
   const [existingSubmission, setExistingSubmission] = useState<any>(null);
-  const [uploadedFile, setUploadedFile] = useState<CloudinaryUploadResult | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<UploadResult | null>(null);
   const [isProcessingOcr, setIsProcessingOcr] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [extractedText, setExtractedText] = useState('');
@@ -75,7 +75,7 @@ const SubmitAssignment = () => {
 
     fetchData();
   }, [assignmentId, classId, user]);
-  const handleFileUpload = async (result: CloudinaryUploadResult) => {
+  const handleFileUpload = async (result: UploadResult) => {
     setUploadedFile(result);
     setError(null);
     toast.success('File uploaded successfully! Processing text...');
@@ -102,7 +102,7 @@ const SubmitAssignment = () => {
     toast.error(userFriendlyError);
   };
 
-  const handleProcessOcr = async (fileResult?: CloudinaryUploadResult) => {
+  const handleProcessOcr = async (fileResult?: UploadResult) => {
   const fileToProcess = fileResult || uploadedFile;
 
   if (!fileToProcess) {
@@ -114,100 +114,24 @@ const SubmitAssignment = () => {
   setError(null);
 
   try {
-    // ADD THIS: Wait for Cloudinary to fully process the file
-    if (fileResult) { // Only delay for newly uploaded files
-      console.log('Waiting for Cloudinary to process file...');
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
-    }
-
-    // CHANGE THIS: Use secure_url directly instead of getCloudinaryFetchUrl
-    const fetchUrl = fileToProcess.secure_url;
-    console.log('Fetching file from Cloudinary URL:', fetchUrl);
-    console.log('Original URL was:', fileToProcess.secure_url);
+    // Fetch file from Supabase Storage URL
+    const fetchUrl = fileToProcess.url;
+    console.log('Fetching file from Supabase Storage URL:', fetchUrl);
 
     const response = await fetch(fetchUrl);
     if (!response.ok) {
-      throw new Error(`Failed to fetch file from Cloudinary: ${response.status} ${response.statusText}`);
+      throw new Error(`Failed to fetch file: ${response.status} ${response.statusText}`);
     }
 
     const blob = await response.blob();
     console.log('Blob details:', { type: blob.type, size: blob.size });
 
-    // Determine the correct MIME type and ensure filename has extension
-    let mimeType = blob.type;
-    let filename = fileToProcess.original_filename;
-
-    // Get extension from original filename or format field
-    let extension = '';
-    if (filename && filename.includes('.')) {
-      extension = filename.split('.').pop()?.toLowerCase() || '';
-    } else if (fileToProcess.format) {
-      extension = fileToProcess.format.toLowerCase();
-    }
-
-    // If no extension found, try to determine from MIME type
-    if (!extension && mimeType) {
-      switch (mimeType) {
-        case 'application/pdf':
-          extension = 'pdf';
-          break;
-        case 'image/png':
-          extension = 'png';
-          break;
-        case 'image/jpeg':
-          extension = 'jpg';
-          break;
-        case 'image/avif':
-          extension = 'avif';
-          break;
-        case 'image/gif':
-          extension = 'gif';
-          break;
-      }
-    }
-
-    // Set MIME type based on extension if not already set
-    if (!mimeType || mimeType === 'application/octet-stream') {
-      switch (extension) {
-        case 'pdf':
-          mimeType = 'application/pdf';
-          break;
-        case 'png':
-          mimeType = 'image/png';
-          break;
-        case 'jpg':
-        case 'jpeg':
-          mimeType = 'image/jpeg';
-          break;
-        case 'avif':
-          mimeType = 'image/avif';
-          break;
-        case 'gif':
-          mimeType = 'image/gif';
-          break;
-        default:
-          console.warn(`Unknown file extension: ${extension}`);
-      }
-    }
-
-    // Ensure filename has extension
-    if (filename && !filename.includes('.') && extension) {
-      filename = `${filename}.${extension}`;
-    } else if (!filename && extension) {
-      filename = `file.${extension}`;
-    } else if (!filename) {
-      filename = 'file';
-    }
-
-    const file = new File([blob], filename, { type: mimeType });
+    // Create file object for OCR
+    const file = new File([blob], fileToProcess.fileName, { type: fileToProcess.fileType });
     console.log('Created file object:', {
       name: file.name,
       type: file.type,
-      size: file.size,
-      originalFilename: fileToProcess.original_filename,
-      cloudinaryFormat: fileToProcess.format,
-      detectedExtension: extension,
-      finalFilename: filename
+      size: file.size
     });
 
     const result = await extractText(file);
@@ -219,7 +143,7 @@ const SubmitAssignment = () => {
       toast.success('Text extracted successfully!');
 
       // Automatically submit the assignment after OCR completion
-      if (fileResult) { // Only auto-submit if this was triggered by file upload
+      if (fileResult) {
         await handleAutoSubmit(fileToProcess, result.extracted_text);
       }
     } else {
@@ -230,45 +154,23 @@ const SubmitAssignment = () => {
   } catch (err: any) {
     let errorMessage = 'Error processing OCR. Please try again.';
 
-    // Handle different types of errors with user-friendly messages
-    if (err.response?.status === 401) {
+    if (err.message?.includes('Failed to fetch')) {
       errorMessage = 'Unable to access the uploaded file. Please try uploading again.';
-    } else if (err.response?.status === 400) {
-      const backendError = err.response?.data?.error || '';
-      if (backendError.includes('Unsupported file type')) {
-        const supportedTypes = err.response?.data?.supported_types || ['PDF', 'PNG', 'JPG', 'JPEG', 'AVIF', 'GIF'];
-        errorMessage = `File type not supported. Please upload one of these file types: ${supportedTypes.join(', ')}`;
-      } else if (backendError.includes('No file')) {
-        errorMessage = 'No file was received. Please try uploading again.';
-      } else {
-        errorMessage = backendError || errorMessage;
-      }
-    } else if (err.response?.status === 500) {
-      errorMessage = 'Server error occurred while processing your file. Please try again later.';
-    } else if (err.message?.includes('Failed to fetch')) {
-      errorMessage = 'Unable to access the uploaded file. This might be a temporary issue. Please try uploading again.';
-    } else if (err.message?.includes('timeout') || err.code === 'ECONNABORTED') {
-      errorMessage = 'OCR processing timed out. Please try again with a smaller file or different format.';
-    } else if (err.message?.includes('Network Error')) {
-      errorMessage = 'Network connection error. Please check your internet connection and try again.';
+    } else if (err.message?.includes('timeout')) {
+      errorMessage = 'OCR processing timed out. Please try again with a smaller file.';
     } else if (err.message) {
       errorMessage = err.message;
     }
 
     setError(errorMessage);
-    console.error('Error processing OCR:', {
-      status: err.response?.status,
-      data: err.response?.data,
-      message: err.message,
-      fullError: err
-    });
+    console.error('Error processing OCR:', err);
     toast.error(errorMessage);
   } finally {
     setIsProcessingOcr(false);
   }
 };
 
-  const handleAutoSubmit = async (fileResult: CloudinaryUploadResult, ocrText: string) => {
+  const handleAutoSubmit = async (fileResult: UploadResult, ocrText: string) => {
     if (!user || !assignment) {
       console.error('Missing user or assignment data for auto-submit');
       return;
@@ -283,8 +185,8 @@ const SubmitAssignment = () => {
       const submissionData = {
         assignment_id: assignmentId!,
         student_id: user.id,
-        file_url: fileResult.secure_url,
-        file_name: fileResult.original_filename,
+        file_url: fileResult.url,
+        file_name: fileResult.fileName,
         ocr_text: ocrText
       };
 
@@ -292,8 +194,8 @@ const SubmitAssignment = () => {
       if (existingSubmission) {
         // Update existing submission
         submissionResult = await updateSubmission(existingSubmission.id, {
-          file_url: fileResult.secure_url,
-          file_name: fileResult.original_filename,
+          file_url: fileResult.url,
+          file_name: fileResult.fileName,
           ocr_text: ocrText
         });
       } else {
@@ -382,8 +284,8 @@ const SubmitAssignment = () => {
       const submissionData = {
         assignment_id: assignmentId!,
         student_id: user.id,
-        file_url: uploadedFile.secure_url,
-        file_name: uploadedFile.original_filename,
+        file_url: uploadedFile.url,
+        file_name: uploadedFile.fileName,
         ocr_text: extractedText
       };
 
@@ -391,8 +293,8 @@ const SubmitAssignment = () => {
       if (existingSubmission) {
         // Update existing submission
         submissionResult = await updateSubmission(existingSubmission.id, {
-          file_url: uploadedFile.secure_url,
-          file_name: uploadedFile.original_filename,
+          file_url: uploadedFile.url,
+          file_name: uploadedFile.fileName,
           ocr_text: extractedText
         });
       } else {
@@ -522,6 +424,7 @@ const SubmitAssignment = () => {
                   <FileUpload
                     onUploadComplete={handleFileUpload}
                     onUploadError={handleUploadError}
+                    assignmentId={assignmentId}
                     disabled={isSubmitting || isProcessingOcr || !!existingSubmission}
                     className="mb-4"
                   />
