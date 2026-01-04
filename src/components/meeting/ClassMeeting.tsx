@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { createClassMeeting, getActiveClassMeeting, endMeeting, notifyClassAboutMeeting } from '../../utils/supabase';
 import { toast } from 'react-hot-toast';
-import { Video, VideoOff, Users, X, ExternalLink, Loader2 } from 'lucide-react';
+import { Video, VideoOff, Users, ExternalLink, Loader2 } from 'lucide-react';
 
 interface ClassMeetingProps {
   classId: string;
@@ -12,31 +12,20 @@ interface ClassMeetingProps {
 }
 
 // Get IntelliMeet URL from environment or use default
-const INTELLIMEET_URL = import.meta.env.VITE_INTELLIMEET_URL || 'http://localhost:5174';
+const INTELLIMEET_URL = import.meta.env.VITE_INTELLIMEET_URL || 'http://localhost:8080';
 
 const ClassMeeting: React.FC<ClassMeetingProps> = ({ classId, className, isTeacher, onClose }) => {
   const { user } = useAuth();
   const [activeMeeting, setActiveMeeting] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
-  const [showMeeting, setShowMeeting] = useState(false);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
     checkActiveMeeting();
     
-    // Listen for messages from iframe
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'MEETING_ENDED') {
-        setShowMeeting(false);
-        setActiveMeeting(null);
-        toast.success('Meeting ended');
-        onClose?.();
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
+    // Poll for meeting status changes every 10 seconds
+    const interval = setInterval(checkActiveMeeting, 10000);
+    return () => clearInterval(interval);
   }, [classId]);
 
   const checkActiveMeeting = async () => {
@@ -44,6 +33,8 @@ const ClassMeeting: React.FC<ClassMeetingProps> = ({ classId, className, isTeach
     const { data, error } = await getActiveClassMeeting(classId);
     if (!error && data) {
       setActiveMeeting(data);
+    } else {
+      setActiveMeeting(null);
     }
     setIsLoading(false);
   };
@@ -65,11 +56,13 @@ const ClassMeeting: React.FC<ClassMeetingProps> = ({ classId, className, isTeach
       }
 
       setActiveMeeting(data);
-      setShowMeeting(true);
       
       // Notify class members
       await notifyClassAboutMeeting(classId, data.code, data.title, user.name);
       toast.success('Meeting started! Students have been notified.');
+      
+      // Open meeting in new tab
+      openMeetingInNewTab(data, true);
     } catch (err) {
       toast.error('Failed to start meeting');
     } finally {
@@ -77,9 +70,15 @@ const ClassMeeting: React.FC<ClassMeetingProps> = ({ classId, className, isTeach
     }
   };
 
+  const openMeetingInNewTab = (meeting: any, isHost: boolean) => {
+    const url = `${INTELLIMEET_URL}/meeting/${meeting.code}`;
+    window.open(url, '_blank');
+  };
+
   const handleJoinMeeting = () => {
-    if (activeMeeting) {
-      setShowMeeting(true);
+    if (activeMeeting && user) {
+      const isHost = user.id === activeMeeting.host_id;
+      openMeetingInNewTab(activeMeeting, isHost);
     }
   };
 
@@ -88,7 +87,6 @@ const ClassMeeting: React.FC<ClassMeetingProps> = ({ classId, className, isTeach
     
     try {
       await endMeeting(activeMeeting.id);
-      setShowMeeting(false);
       setActiveMeeting(null);
       toast.success('Meeting ended');
       onClose?.();
@@ -97,75 +95,10 @@ const ClassMeeting: React.FC<ClassMeetingProps> = ({ classId, className, isTeach
     }
   };
 
-  const handleOpenInNewTab = () => {
-    if (activeMeeting) {
-      const isHost = user?.id === activeMeeting.host_id;
-      const url = `${INTELLIMEET_URL}/meeting/${activeMeeting.code}?host=${isHost}&name=${encodeURIComponent(user?.name || '')}`;
-      window.open(url, '_blank');
-    }
-  };
-
-  if (isLoading) {
+  if (isLoading && !activeMeeting) {
     return (
       <div className="flex items-center justify-center p-8">
         <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
-      </div>
-    );
-  }
-
-  // Show embedded meeting
-  if (showMeeting && activeMeeting) {
-    const isHost = user?.id === activeMeeting.host_id;
-    const embedUrl = `${INTELLIMEET_URL}/embed/${activeMeeting.code}?host=${isHost}&name=${encodeURIComponent(user?.name || '')}&classId=${classId}`;
-
-    return (
-      <div className="fixed inset-0 z-50 bg-gray-900">
-        {/* Meeting Header */}
-        <div className="absolute top-0 left-0 right-0 bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between z-10">
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-2">
-              <Video className="h-5 w-5 text-red-500" />
-              <span className="text-white font-medium">{activeMeeting.title}</span>
-            </div>
-            <span className="text-gray-400 text-sm">Code: {activeMeeting.code}</span>
-          </div>
-          
-          <div className="flex items-center space-x-3">
-            <button
-              onClick={handleOpenInNewTab}
-              className="flex items-center space-x-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded-md text-sm transition-colors"
-            >
-              <ExternalLink className="h-4 w-4" />
-              <span>Open in New Tab</span>
-            </button>
-            
-            {isTeacher && (
-              <button
-                onClick={handleEndMeeting}
-                className="flex items-center space-x-2 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-md text-sm transition-colors"
-              >
-                <VideoOff className="h-4 w-4" />
-                <span>End Meeting</span>
-              </button>
-            )}
-            
-            <button
-              onClick={() => setShowMeeting(false)}
-              className="p-2 hover:bg-gray-700 rounded-md text-gray-400 hover:text-white transition-colors"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Embedded Meeting */}
-        <iframe
-          ref={iframeRef}
-          src={embedUrl}
-          className="w-full h-full pt-14"
-          allow="camera; microphone; display-capture; autoplay; clipboard-write"
-          allowFullScreen
-        />
       </div>
     );
   }
@@ -203,7 +136,7 @@ const ClassMeeting: React.FC<ClassMeetingProps> = ({ classId, className, isTeach
               onClick={handleJoinMeeting}
               className="flex-1 flex items-center justify-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
             >
-              <Users className="h-5 w-5" />
+              <ExternalLink className="h-5 w-5" />
               <span>Join Meeting</span>
             </button>
             
@@ -217,6 +150,10 @@ const ClassMeeting: React.FC<ClassMeetingProps> = ({ classId, className, isTeach
               </button>
             )}
           </div>
+          
+          <p className="text-xs text-gray-500 text-center">
+            Meeting opens in a new tab on IntelliMeet
+          </p>
         </div>
       ) : isTeacher ? (
         <button
